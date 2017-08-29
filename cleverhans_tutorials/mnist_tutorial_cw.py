@@ -10,7 +10,7 @@ from tensorflow.python.platform import flags
 
 import logging
 import os
-from cleverhans.attacks import CarliniWagnerL2
+from cleverhans.attacks import CarliniWagner
 from cleverhans.utils import pair_visual, grid_visual, AccuracyReport
 from cleverhans.utils import set_log_level
 from cleverhans.utils_mnist import data_mnist
@@ -25,6 +25,7 @@ def mnist_tutorial_cw(train_start=0, train_end=60000, test_start=0,
                       test_end=10000, viz_enabled=True, nb_epochs=6,
                       batch_size=128, nb_classes=10, source_samples=10,
                       learning_rate=0.001, attack_iterations=100,
+                      ord='2', tau=0.3,
                       model_path=os.path.join("models", "mnist"),
                       targeted=True):
     """
@@ -111,7 +112,7 @@ def mnist_tutorial_cw(train_start=0, train_end=60000, test_start=0,
     print("This could take some time ...")
 
     # Instantiate a CW attack object
-    cw = CarliniWagnerL2(model, back='tf', sess=sess)
+    cw = CarliniWagner(model, back='tf', sess=sess)
 
     idxs = [np.where(np.argmax(Y_test, axis=1) == i)[0][0] for i in range(10)]
     if targeted:
@@ -141,6 +142,8 @@ def mnist_tutorial_cw(train_start=0, train_end=60000, test_start=0,
                  'max_iterations': attack_iterations,
                  'learning_rate': 0.1,
                  'batch_size': 100 if targeted else 10,
+                 'ord': np.inf if ord=='inf' else 2,
+                 'tau': tau,
                  'initial_const': 10}
 
     adv = cw.generate_np(adv_inputs,
@@ -170,9 +173,11 @@ def mnist_tutorial_cw(train_start=0, train_end=60000, test_start=0,
     report.clean_train_adv_eval = 1.-adv_accuracy
 
     # Compute the average distortion introduced by the algorithm
-    percent_perturbed = np.mean(np.sum((adv - adv_inputs)**2,
-                                       axis=(1, 2, 3))**.5)
-    print('Avg. L_2 norm of perturbations {0:.4f}'.format(percent_perturbed))
+    percent_perturbedl2 = np.mean(np.sum((adv - adv_inputs)**2,
+                                         axis=(1, 2, 3))**.5)
+    percent_perturbedli = np.mean(abs(adv - adv_inputs).max(axis=(1, 2, 3)))
+    print('Avg. L_2 norm of perturbations {0:.4f}'.format(percent_perturbedl2))
+    print('Avg. L_i norm of perturbations {0:.4f}'.format(percent_perturbedli))
 
     # Close TF session
     sess.close()
@@ -193,6 +198,8 @@ def main(argv=None):
                       source_samples=FLAGS.source_samples,
                       learning_rate=FLAGS.learning_rate,
                       attack_iterations=FLAGS.attack_iterations,
+                      ord=FLAGS.ord,
+                      tau=FLAGS.tau,
                       model_path=FLAGS.model_path,
                       targeted=FLAGS.targeted)
 
@@ -206,6 +213,11 @@ if __name__ == '__main__':
     flags.DEFINE_float('learning_rate', 0.001, 'Learning rate for training')
     flags.DEFINE_string('model_path', os.path.join("models", "mnist"),
                         'Path to save or load the model file')
+    flags.DEFINE_string('ord', "2",
+                        'Distance metric used for attack'
+                        'Choose between inf and 2')
+    flags.DEFINE_float('tau', 0.3, 'Threshold used to penalize large'
+                       'components of the perturbation when using L-inf')
     flags.DEFINE_boolean('attack_iterations', 100,
                          'Number of iterations to run attack; 1000 is good')
     flags.DEFINE_boolean('targeted', True,

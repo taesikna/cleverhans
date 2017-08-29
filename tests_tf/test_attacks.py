@@ -12,7 +12,7 @@ from cleverhans.attacks import FastGradientMethod
 from cleverhans.attacks import BasicIterativeMethod
 from cleverhans.attacks import VirtualAdversarialMethod
 from cleverhans.attacks import SaliencyMapMethod
-from cleverhans.attacks import CarliniWagnerL2
+from cleverhans.attacks import CarliniWagner
 
 
 class CleverHansTest(unittest.TestCase):
@@ -298,9 +298,9 @@ class TestBasicIterativeMethod(TestFastGradientMethod):
         self.assertTrue(ok[0])
 
 
-class TestCarliniWagnerL2(CleverHansTest):
+class TestCarliniWagner(CleverHansTest):
     def setUp(self):
-        super(TestCarliniWagnerL2, self).setUp()
+        super(TestCarliniWagner, self).setUp()
         import tensorflow as tf
 
         # The world's simplest neural network
@@ -313,7 +313,7 @@ class TestCarliniWagnerL2(CleverHansTest):
 
         self.sess = tf.Session()
         self.model = my_model
-        self.attack = CarliniWagnerL2(self.model, sess=self.sess)
+        self.attack = CarliniWagner(self.model, sess=self.sess)
 
     def test_generate_np_untargeted_gives_adversarial_example(self):
         x_val = np.random.rand(100, 2)
@@ -399,7 +399,7 @@ class TestCarliniWagnerL2(CleverHansTest):
             orig_labs = np.argmax(self.sess.run(trivial_model(x_val)), axis=1)
             feed_labs = np.zeros((10, 2))
             feed_labs[np.arange(10), np.random.randint(0, 2, 10)] = 1
-            attack = CarliniWagnerL2(trivial_model, sess=self.sess)
+            attack = CarliniWagner(trivial_model, sess=self.sess)
             x_adv = attack.generate_np(x_val,
                                        max_iterations=100,
                                        binary_search_steps=2,
@@ -434,7 +434,7 @@ class TestCarliniWagnerL2(CleverHansTest):
             x_val = np.array(x_val, dtype=np.float32)
 
             orig_labs = np.argmax(self.sess.run(trivial_model(x_val)), axis=1)
-            attack = CarliniWagnerL2(trivial_model, sess=self.sess)
+            attack = CarliniWagner(trivial_model, sess=self.sess)
             x_adv = attack.generate_np(x_val,
                                        max_iterations=100,
                                        binary_search_steps=2,

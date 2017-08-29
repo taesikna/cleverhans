@@ -634,7 +634,7 @@ class VirtualAdversarialMethod(Attack):
         return True
 
 
-class CarliniWagnerL2(Attack):
+class CarliniWagner(Attack):
     """
     This attack was originally proposed by Carlini and Wagner. It is an
     iterative attack that finds adversarial examples on many defenses that
@@ -651,7 +651,7 @@ class CarliniWagnerL2(Attack):
         Note: the model parameter should be an instance of the
         cleverhans.model.Model abstraction provided by CleverHans.
         """
-        super(CarliniWagnerL2, self).__init__(model, back, sess)
+        super(CarliniWagner, self).__init__(model, back, sess)
 
         if self.back == 'th':
             raise NotImplementedError('Theano version not implemented.')
@@ -663,7 +663,7 @@ class CarliniWagnerL2(Attack):
         self.structural_kwargs = ['batch_size', 'confidence',
                                   'targeted', 'learning_rate',
                                   'binary_search_steps', 'max_iterations',
-                                  'abort_early', 'initial_const',
+                                  'abort_early', 'initial_const', 'ord', 'tau',
                                   'clip_min', 'clip_max']
 
         if not isinstance(self.model, Model):
@@ -705,20 +705,27 @@ class CarliniWagnerL2(Attack):
                               If binary_search_steps is large, the initial
                               constant is not important. A smaller value of
                               this constant gives lower distortion results.
+        :param ord: (optional) Order of the norm (mimics NumPy).
+                    Possible values: np.inf or 2.
+        :param tau: (optional float) Threshold used to penalize large
+                    components of the perturbation when using L-inf. Any
+                    components of the perturbation that exceed tau are being
+                    penalized.
         :param clip_min: (optional float) Minimum input component value
         :param clip_max: (optional float) Maximum input component value
         """
         import tensorflow as tf
-        from .attacks_tf import CarliniWagnerL2 as CWL2
+        from .attacks_tf import CarliniWagner as CW
         self.parse_params(**kwargs)
 
         labels, nb_classes = self.get_or_guess_labels(x, kwargs)
 
-        attack = CWL2(self.sess, self.model, self.batch_size,
+        attack = CW(self.sess, self.model, self.batch_size,
                       self.confidence, 'y_target' in kwargs,
                       self.learning_rate, self.binary_search_steps,
                       self.max_iterations, self.abort_early,
-                      self.initial_const, self.clip_min, self.clip_max,
+                      self.initial_const, self.ord, self.tau,
+                      self.clip_min, self.clip_max,
                       nb_classes, x.get_shape().as_list()[1:])
 
         def cw_wrap(x_val, y_val):
@@ -732,6 +739,7 @@ class CarliniWagnerL2(Attack):
                      learning_rate=5e-3,
                      binary_search_steps=5, max_iterations=1000,
                      abort_early=True, initial_const=1e-2,
+                     ord=2, tau=16./255,
                      clip_min=0, clip_max=1):
 
         # ignore the y and y_target argument
@@ -745,9 +753,12 @@ class CarliniWagnerL2(Attack):
         self.max_iterations = max_iterations
         self.abort_early = abort_early
         self.initial_const = initial_const
+        self.ord = ord
+        self.tau = tau
         self.clip_min = clip_min
         self.clip_max = clip_max
 
+class CarliniWagnerL2(CarliniWagner): pass
 
 def fgsm(x, predictions, eps, back='tf', clip_min=None, clip_max=None):
     """

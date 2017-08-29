@@ -459,12 +459,12 @@ def jacobian_augmentation(sess, x, X_sub_prev, Y_sub, grads, lmbda,
     return X_sub
 
 
-class CarliniWagnerL2(object):
+class CarliniWagner(object):
 
     def __init__(self, sess, model, batch_size, confidence,
                  targeted, learning_rate,
                  binary_search_steps, max_iterations,
-                 abort_early, initial_const,
+                 abort_early, initial_const, ord, tau,
                  clip_min, clip_max, num_labels, shape):
         """
         Return a tensor that constructs adversarial examples for the given
@@ -474,7 +474,7 @@ class CarliniWagnerL2(object):
         :param model: a cleverhans.model.Model object.
         :param batch_size: Number of attacks to run simultaneously.
         :param confidence: Confidence of adversarial examples: higher produces
-                           examples with larger l2 distortion, but more
+                           examples with larger distortion, but more
                            strongly classified as adversarial.
         :param targeted: boolean controlling the behavior of the adversarial
                          examples produced. If set to False, they will be
@@ -496,11 +496,17 @@ class CarliniWagnerL2(object):
                             is unable to make progress (i.e., gets stuck in
                             a local minimum).
         :param initial_const: The initial tradeoff-constant to use to tune the
-                              relative importance of size of the pururbation
+                              relative importance of size of the perturbation
                               and confidence of classification.
                               If binary_search_steps is large, the initial
                               constant is not important. A smaller value of
                               this constant gives lower distortion results.
+        :param ord: (optional) Order of the norm (mimics NumPy).
+                    Possible values: np.inf or 2.
+        :param tau: (optional float) Threshold used to penalize large
+                    components of the perturbation when using L-inf. Any
+                    components of the perturbation that exceed tau are being
+                    penalized.
         :param clip_min: (optional float) Minimum input component value.
         :param clip_max: (optional float) Maximum input component value.
         :param num_labels: the number of classes in the model's output.
@@ -516,6 +522,8 @@ class CarliniWagnerL2(object):
         self.CONFIDENCE = confidence
         self.initial_const = initial_const
         self.batch_size = batch_size
+        self.ord = ord
+        self.tau = tau
         self.clip_min = clip_min
         self.clip_max = clip_max
         self.model = model
@@ -554,8 +562,19 @@ class CarliniWagnerL2(object):
         # distance to the input data
         self.other = (tf.tanh(self.timg) + 1) / \
             2 * (clip_max - clip_min) + clip_min
-        self.l2dist = tf.reduce_sum(tf.square(self.newimg - self.other),
-                                    list(range(1, len(shape))))
+        if ord == np.inf:
+            self.dist_loss = tf.reduce_sum(tf.maximum(0.0,
+                                        tf.abs(self.newimg - self.other)-tau),
+                                        list(range(1, len(shape))))
+            self.lxdist = tf.reduce_max(tf.abs(self.newimg - self.other),
+                                        list(range(1, len(shape))))
+        elif ord == 2:
+            self.dist_loss = tf.reduce_sum(tf.square(self.newimg - self.other),
+                                        list(range(1, len(shape))))
+            self.lxdist = tf.sqrt(self.dist_loss)
+        else:
+            raise NotImplementedError("Only L-inf and L2 norms are "
+                                      "currently implemented.")
 
         # compute the probability of the label class versus the maximum other
         real = tf.reduce_sum((self.tlab) * self.output, 1)
@@ -571,7 +590,7 @@ class CarliniWagnerL2(object):
             loss1 = tf.maximum(0.0, real - other + self.CONFIDENCE)
 
         # sum up the losses
-        self.loss2 = tf.reduce_sum(self.l2dist)
+        self.loss2 = tf.reduce_sum(self.dist_loss)
         self.loss1 = tf.reduce_sum(self.const * loss1)
         self.loss = self.loss1 + self.loss2
 
@@ -599,9 +618,10 @@ class CarliniWagnerL2(object):
         """
 
         r = []
+        L_x = 'L2' if self.ord == 2 else 'Li'
         for i in range(0, len(imgs), self.batch_size):
-            _logger.debug(("Running CWL2 attack on instance " +
-                           "{} of {}").format(i, len(imgs)))
+            _logger.debug(("Running CW{} attack on instance " +
+                           "{} of {}").format(L_x, i, len(imgs)))
             r.extend(self.attack_batch(imgs[i:i + self.batch_size],
                                        targets[i:i + self.batch_size]))
         return np.array(r)
@@ -640,8 +660,8 @@ class CarliniWagnerL2(object):
         CONST = np.ones(batch_size) * self.initial_const
         upper_bound = np.ones(batch_size) * 1e10
 
-        # placeholders for the best l2, score, and instance attack found so far
-        o_bestl2 = [1e10] * batch_size
+        # placeholders for the best lx, score, and instance attack found so far
+        o_bestlx = [1e10] * batch_size
         o_bestscore = [-1] * batch_size
         o_bestattack = np.copy(oimgs)
 
@@ -651,7 +671,7 @@ class CarliniWagnerL2(object):
             batch = imgs[:batch_size]
             batchlab = labs[:batch_size]
 
-            bestl2 = [1e10] * batch_size
+            bestlx = [1e10] * batch_size
             bestscore = [-1] * batch_size
             _logger.debug("  Binary search step {} of {}".
                           format(outer_step, self.BINARY_SEARCH_STEPS))
@@ -668,17 +688,17 @@ class CarliniWagnerL2(object):
             prev = 1e6
             for iteration in range(self.MAX_ITERATIONS):
                 # perform the attack
-                _, l, l2s, scores, nimg = self.sess.run([self.train,
+                _, l, lxs, scores, nimg = self.sess.run([self.train,
                                                          self.loss,
-                                                         self.l2dist,
+                                                         self.lxdist,
                                                          self.output,
                                                          self.newimg])
 
                 if iteration % ((self.MAX_ITERATIONS // 10) or 1) == 0:
                     _logger.debug(("    Iteration {} of {}: loss={:.3g} " +
-                                   "l2={:.3g} f={:.3g}")
+                                   "lx={:.3g} f={:.3g}")
                                   .format(iteration, self.MAX_ITERATIONS,
-                                          l, np.mean(l2s), np.mean(scores)))
+                                          l, np.mean(lxs), np.mean(scores)))
 
                 # check if we should abort search if we're getting nowhere.
                 if self.ABORT_EARLY and \
@@ -690,13 +710,13 @@ class CarliniWagnerL2(object):
                     prev = l
 
                 # adjust the best result found so far
-                for e, (l2, sc, ii) in enumerate(zip(l2s, scores, nimg)):
+                for e, (lx, sc, ii) in enumerate(zip(lxs, scores, nimg)):
                     lab = np.argmax(batchlab[e])
-                    if l2 < bestl2[e] and compare(sc, lab):
-                        bestl2[e] = l2
+                    if lx < bestlx[e] and compare(sc, lab):
+                        bestlx[e] = lx
                         bestscore[e] = np.argmax(sc)
-                    if l2 < o_bestl2[e] and compare(sc, lab):
-                        o_bestl2[e] = l2
+                    if lx < o_bestlx[e] and compare(sc, lab):
+                        o_bestlx[e] = lx
                         o_bestscore[e] = np.argmax(sc)
                         o_bestattack[e] = ii
 
@@ -719,10 +739,10 @@ class CarliniWagnerL2(object):
             _logger.debug("  Successfully generated adversarial examples " +
                           "on {} of {} instances.".
                           format(sum(upper_bound < 1e9), batch_size))
-            o_bestl2 = np.array(o_bestl2)
-            mean = np.mean(np.sqrt(o_bestl2[o_bestl2 < 1e9]))
+            o_bestlx = np.array(o_bestlx)
+            mean = np.mean(o_bestlx[o_bestlx < 1e9])
             _logger.debug("   Mean successful distortion: {:.4g}".format(mean))
 
         # return the best solution found
-        o_bestl2 = np.array(o_bestl2)
+        o_bestlx = np.array(o_bestlx)
         return o_bestattack
